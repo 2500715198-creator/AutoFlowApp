@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoFlow</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef2f4;--panel:#fff;--ink:#14202b;--mute:#5b6b78;--line:#d3dce2;--teal:#0e7c86;--bad:#b3261e;--ok:#23794a;--code:#101c26;--codeink:#d6e3ec}
+@media(prefers-color-scheme:dark){:root{--bg:#0e161d;--panel:#16222c;--ink:#e6eef3;--mute:#93a5b3;--line:#2a3a47;--teal:#4fc3cf;--bad:#ff8a80;--ok:#6fd39a;--code:#0a1218}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.55 "IBM Plex Sans",system-ui,sans-serif;padding:24px 16px 48px}
+main{max-width:1000px;margin:0 auto}
+h1{font-size:1.7rem;margin:0 0 4px}h2{font-size:1.05rem;margin:0 0 10px}
+.sub{color:var(--mute);margin:0 0 18px}
+.grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:16px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px}
+label{display:block;font-weight:600;margin:0 0 4px}
+textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:10px;resize:vertical;margin-bottom:12px}
+#data{font:400 .85rem "IBM Plex Mono",monospace;min-height:140px}#task{min-height:90px}
+button{font:inherit;cursor:pointer;border-radius:4px;padding:9px 16px}
+.go{background:var(--teal);color:#fff;border:0;font-weight:600}.go:disabled{opacity:.55;cursor:default}
+.ghost{background:none;border:1px solid var(--line);color:var(--ink);margin-left:8px}
+:focus-visible{outline:3px solid var(--teal);outline-offset:2px}
+.log>div{padding:6px 0;border-bottom:1px solid var(--line)}
+.step{color:var(--mute)}.problem{color:var(--bad);font-weight:600}.good{color:var(--ok);font-weight:600}
+pre{background:var(--code);color:var(--codeink);border-radius:4px;padding:10px 14px;font:400 .82rem/1.55 "IBM Plex Mono",monospace;overflow-x:auto;margin:6px 0 0}
+summary{cursor:pointer;color:var(--mute)}
+.empty{color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+<h1>AutoFlow</h1>
+<p class="sub">Describe a repetitive task and paste a little sample data. An AI agent writes the code, runs it, checks the result, and fixes its own mistakes.</p>
+<div class="grid">
+<section class="panel">
+<h2>Your task</h2>
+<label for="task">What should happen?</label>
+<textarea id="task"></textarea>
+<label for="data">Sample data (saved as input.txt)</label>
+<textarea id="data"></textarea>
+<button class="go" id="go">Build automation</button>
+<button class="ghost" id="ex" type="button">Load example</button>
+</section>
+<section class="panel">
+<h2>Agent progress</h2>
+<div class="log" id="log" aria-live="polite"><p class="empty">Progress appears here after you press Build automation.</p></div>
+<div id="final"></div>
+</section>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const EX={task:"Remove duplicate emails (ignore capital letters and extra spaces). Print how many unique signups there are, then list them.",
+data:"name,email\nGrace,Grace@example.com\nJohn, john@example.com \ngrace,grace@example.com\nAmina,amina@example.com\nJOHN,JOHN@example.com"};
+$("ex").onclick=()=>{$("task").value=EX.task;$("data").value=EX.data};
+function add(cls,text){const d=document.createElement("div");d.className=cls;d.textContent=text;$("log").appendChild(d);return d}
+function addCode(title,code,open){const d=document.createElement("div");const s=document.createElement("details");if(open)s.open=true;const m=document.createElement("summary");m.textContent=title;const p=document.createElement("pre");p.textContent=code;s.append(m,p);d.appendChild(s);$("log").appendChild(d)}
+function finish(ev){
+ const f=$("final");f.innerHTML="";
+ const h=document.createElement("p");h.className=ev.ok?"good":"problem";
+ h.textContent=ev.ok?`Done in ${ev.attempts} attempt${ev.attempts>1?"s":""} (${ev.seconds}s). ${ev.reason}`:ev.reason;f.appendChild(h);
+ if(ev.code){const b=document.createElement("button");b.className="go";b.textContent="Download script";
+  b.onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([ev.code],{type:"text/x-python"}));a.download="automation.py";a.click()};f.appendChild(b)}}
+function handle(ev){
+ if(ev.type==="step")add("step",ev.text);
+ else if(ev.type==="code")addCode(`Attempt ${ev.attempt} code`,ev.code,false);
+ else if(ev.type==="output")addCode("Output",ev.text||"(empty)",true);
+ else if(ev.type==="problem"){add("problem",ev.text);if(ev.detail)addCode("Error details",ev.detail,false)}
+ else if(ev.type==="error"){add("problem",ev.text);$("go").disabled=false}
+ else if(ev.type==="done")finish(ev)}
+$("go").onclick=async()=>{
+ const task=$("task").value.trim();if(!task){add("problem","Describe the task first.");return}
+ $("go").disabled=true;$("log").innerHTML="";$("final").innerHTML="";
+ try{
+  const res=await fetch("/api/build",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task,data:$("data").value})});
+  if(!res.ok){const j=await res.json();add("problem",j.error||"Request failed");$("go").disabled=false;return}
+  const rd=res.body.getReader(),dec=new TextDecoder();let buf="";
+  for(;;){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+   let i;while((i=buf.indexOf("\n"))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1);if(line.trim())handle(JSON.parse(line))}}
+ }catch(e){add("problem","Connection failed: "+e.message)}
+ $("go").disabled=false};
+$("ex").click();
+</script>
+</body>
+</html>
